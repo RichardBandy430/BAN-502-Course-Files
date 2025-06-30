@@ -1,0 +1,120 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+# Phase One RMD
+
+## Richard Bandy
+
+### Setup
+
+```{r Setup}
+library(tidyverse)
+library(scales)
+data <- read_csv("train.csv") %>%
+  mutate(
+    failure = factor(failure, levels = c("No","Yes")),
+    product_code = factor(product_code)
+  )
+data_clean <- data %>%
+  drop_na()
+
+sum(is.na(data_clean))
+glimpse(data)
+```
+
+### Plot 1
+
+```{r Plot 1}
+ggplot(data, aes(x = failure, y = loading, fill = failure)) +
+  geom_boxplot(width = 0.6) +
+  labs(
+    title = "Loading Distribution by Failure Outcome",
+    x     = "Failure",
+    y     = "Loading (fluid absorbed)"
+  ) +
+  scale_fill_manual(values = c("#4E79A7","#E15759")) +
+  theme_minimal() +
+  theme(legend.position="none")
+```
+
+### Plot 2
+
+```{r Plot 2}
+ggplot(data, aes(x = product_code, fill = failure)) +
+  geom_bar(position = "fill", width = 0.7) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  labs(
+    title = "Failure Proportion by Product Code",
+    x     = "Product Code",
+    y     = "Proportion of Observations",
+    fill  = "Failure"
+  ) +
+  theme_minimal()
+```
+
+### Plot 3
+
+```{r Plot 3}
+failure_bin <- if_else(data$failure == "Yes", 1, 0)
+
+cor_df <- data %>%
+  select(starts_with("attribute_")) %>%
+  keep(~ n_distinct(na.omit(.x)) > 1) %>%
+  imap_dfr(function(col, name)
+    {
+    vals <- suppressWarnings(as.numeric(col))
+    if (all(is.na(vals))) vals <- as.numeric(factor(col))
+    tibble(attribute = name,
+           corr      = cor(vals, failure_bin, use = "complete.obs"))
+  }) %>%
+  arrange(corr)
+
+ggplot(cor_df, aes(x = corr, y = fct_reorder(attribute, corr))) +
+  geom_segment(aes(x = 0, xend = corr, y = attribute, yend = attribute),
+               color = "grey80") +
+  geom_point(size = 3, color = "#4E79A7") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+  labs(
+    title = "Attribute–Failure Correlation",
+    x     = "Correlation with Failure",
+    y     = "Attribute"
+  ) +
+  theme_minimal() +
+  theme(panel.grid.major.y = element_blank())
+```
+
+### Plot 4
+
+```{r Plot 4}
+cor_df <- data %>%
+  mutate(failure_bin = if_else(failure == "Yes", 1, 0)) %>%
+  select(failure_bin, starts_with("measurement_")) %>%
+  pivot_longer(
+    cols      = -failure_bin,
+    names_to  = "measurement",
+    values_to = "value"
+  ) %>%
+  group_by(measurement) %>%
+  summarise(
+    corr = cor(value, failure_bin, use = "complete.obs"),
+    .groups = "drop"
+  ) %>%
+  arrange(corr)
+
+ggplot(cor_df, aes(x = corr, y = reorder(measurement, corr))) +
+  geom_segment(aes(x = 0, xend = corr, y = reorder(measurement, corr), yend = reorder(measurement, corr)),
+               color = "gray80") +
+  geom_point(size = 3, color = "#E15759") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+  labs(
+    title = "Measurement–Failure Correlation",
+    x     = "Correlation with Failure",
+    y     = "Measurement"
+  ) +
+  theme_minimal() +
+  theme(panel.grid.major.y = element_blank())
+
+```
+

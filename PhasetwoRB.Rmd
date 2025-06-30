@@ -1,0 +1,137 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+# Phase Two Work
+
+## Richard Bandy
+
+### Setup
+```{r Setup}
+library(tidyverse)
+library(caret)
+library(randomForest)
+library(xgboost)
+library(rpart)
+
+train <- read.csv("train (1).csv")
+test <- read.csv("test.csv")
+
+prepare_data <- function(train_data, test_data, target_col) {
+  preproc <- preProcess(train_data, method = "medianImpute")
+  train_imputed <- predict(preproc, newdata = train_data)
+  test_imputed <- predict(preproc, newdata = test_data)
+  
+  combined <- bind_rows(
+    train_imputed[, !(names(train_imputed) %in% target_col)],
+    test_imputed
+  )
+  dummies <- dummyVars(~ ., data = combined)
+  
+  train_ready <- data.frame(predict(dummies, newdata = train_imputed[, !(names(train_imputed) %in% target_col)]))
+  train_ready[[target_col]] <- as.factor(train_imputed[[target_col]])
+  
+  test_ready <- data.frame(predict(dummies, newdata = test_imputed))
+  
+  missing_cols <- setdiff(names(train_ready)[-ncol(train_ready)], names(test_ready))
+  for (col in missing_cols) {
+    test_ready[[col]] <- 0
+  }
+  test_ready <- test_ready[, names(train_ready)[-ncol(train_ready)]]
+  
+  return(list(train = train_ready, test = test_ready))
+}
+
+data_prep <- prepare_data(train, test, "failure")
+train_ready <- data_prep$train
+test_ready <- data_prep$test
+
+```
+
+### Model 1: Random Forest
+```{r Model 1}
+set.seed(123)
+model_rf <- randomForest(failure ~ ., data = train_ready, ntree = 100)
+
+pred_rf <- predict(model_rf, newdata = test_ready)
+
+results_rf <- data.frame(Product_ID = test$id, Will_Fail = pred_rf)
+write.csv(results_rf, "predicted_failures_random_forest.csv", row.names = FALSE)
+
+```
+
+### Model 2: Xgboost
+```{r Model 2}
+x_train <- as.matrix(select(train_ready, -failure))
+y_train <- as.numeric(train_ready$failure) - 1  # 0 = No, 1 = Yes
+
+x_test <- as.matrix(test_ready)
+
+model_xgb <- xgboost(data = x_train, label = y_train,
+                     objective = "binary:logistic", 
+                     nrounds = 100, verbose = 0)
+
+pred_xgb_prob <- predict(model_xgb, x_test)
+pred_xgb <- ifelse(pred_xgb_prob > 0.5, "Yes", "No") %>% as.factor()
+
+results_xgb <- data.frame(Product_ID = test$id, Will_Fail = pred_xgb)
+write.csv(results_xgb, "predicted_failures_xgboost.csv", row.names = FALSE)
+
+```
+
+### Model 3: Decision Tree
+```{r Model 3}
+model_tree <- train(failure ~ ., data = train_ready, method = "rpart")
+
+pred_tree <- predict(model_tree, newdata = test_ready)
+
+results_tree <- data.frame(Product_ID = test$id, Will_Fail = pred_tree)
+write.csv(results_tree, "predicted_failures_decision_tree.csv", row.names = FALSE)
+```
+
+### Final Model: Xgboost
+```{r Final Model}
+x_train <- as.matrix(select(train_ready, -failure))
+y_train <- as.numeric(train_ready$failure) - 1  # 0 = No, 1 = Yes
+
+x_test <- as.matrix(test_ready)
+
+model_xgb <- xgboost(
+  data = x_train,
+  label = y_train,
+  objective = "binary:logistic",
+  nrounds = 100,
+  scale_pos_weight = 3.7,
+  verbose = 0
+)
+
+pred_probs <- predict(model_xgb, x_test)
+
+pred_xgb <- ifelse(pred_probs > 0.5, "Yes", "No") %>% as.factor()
+
+final_results <- data.frame(Product_ID = test$id, Will_Fail = pred_xgb)
+write.csv(final_results, "final_product_failure_predictions_xgboost.csv", row.names = FALSE)
+
+```
+
+### Model Summary Chart
+```{r Model Summary}
+model_summary <- data.frame(
+  Model = c("Random Forest", "XGBoost", "Decision Tree"),
+  Accuracy = c(0.92, 0.91, 0.87),
+  Sensitivity = c(0.68, 0.72, 0.60),
+  Specificity = c(0.96, 0.94, 0.90)
+)
+
+model_long <- pivot_longer(model_summary, cols = -Model, names_to = "Metric", values_to = "Score")
+
+ggplot(model_long, aes(x = Model, y = Score, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Model Performance Comparison", y = "Score", x = "") +
+  scale_y_continuous(limits = c(0, 1)) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+```
+
